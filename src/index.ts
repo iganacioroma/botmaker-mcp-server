@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import axios, { AxiosError } from "axios";
-import express from "express";
+import express, { Request, Response } from "express";
 
 const BOTMAKER_TOKEN = process.env.BOTMAKER_TOKEN ?? "";
 const BASE_V1 = "https://go.botmaker.com/api/v1.0";
@@ -96,7 +96,7 @@ function makeServer(): McpServer {
 
   server.registerTool("botmaker_list_conversations", {
     title: "Listar conversaciones recientes",
-    description: "Lista conversaciones recientes con estado y último mensaje.\nArgs:\n- limit: máx (default 20)\n- offset: paginación (default 0)",
+    description: "Lista conversaciones recientes.\nArgs:\n- limit: máx (default 20)\n- offset: paginación (default 0)",
     inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, async ({ limit, offset }) => {
@@ -126,7 +126,7 @@ function makeServer(): McpServer {
 
   server.registerTool("botmaker_trigger_intent", {
     title: "Disparar una intención",
-    description: "Activa una intención del bot para testear sin que el usuario escriba.\nArgs:\n- intent_id: ID de la intención",
+    description: "Activa una intención del bot para testear.\nArgs:\n- intent_id: ID de la intención",
     inputSchema: z.object({ intent_id: z.string().min(1) }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async ({ intent_id }) => {
@@ -159,18 +159,47 @@ function makeServer(): McpServer {
 
 async function main() {
   if (!BOTMAKER_TOKEN) { console.error("❌ ERROR: BOTMAKER_TOKEN no configurado."); process.exit(1); }
+
   const app = express();
   app.use(express.json());
-  app.post("/mcp", async (req, res) => {
+
+  // HEAD y GET en /mcp — requerido por Claude.ai para protocol discovery
+  app.head("/mcp", (_req: Request, res: Response) => {
+    res.setHeader("MCP-Protocol-Version", "2025-03-26");
+    res.setHeader("Allow", "GET, POST, HEAD");
+    res.status(200).end();
+  });
+
+  app.get("/mcp", (_req: Request, res: Response) => {
+    res.setHeader("MCP-Protocol-Version", "2025-03-26");
+    res.status(405).setHeader("Allow", "POST").json({ error: "Use POST to connect to this MCP server" });
+  });
+
+  // POST /mcp — endpoint principal
+  app.post("/mcp", async (req: Request, res: Response) => {
     const server = makeServer();
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
     res.on("close", () => transport.close());
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
-  app.get("/health", (_req, res) => { res.json({ status: "ok", service: "botmaker-mcp-server" }); });
+
+  // Health check
+  app.get("/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok", service: "botmaker-mcp-server", version: "1.0.0" });
+  });
+
+  app.get("/", (_req: Request, res: Response) => {
+    res.json({ service: "botmaker-mcp-server", mcp_endpoint: "/mcp", health: "/health" });
+  });
+
   const port = parseInt(process.env.PORT ?? "3000");
-  app.listen(port, () => { console.error(`✅ Botmaker MCP Server corriendo en puerto ${port}`); });
+  app.listen(port, () => {
+    console.error(`✅ Botmaker MCP Server corriendo en puerto ${port}`);
+  });
 }
 
 main().catch((err) => { console.error("Error fatal:", err); process.exit(1); });
