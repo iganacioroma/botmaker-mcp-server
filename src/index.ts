@@ -6,8 +6,7 @@ import axios, { AxiosError } from "axios";
 import express, { Request, Response } from "express";
 
 const BOTMAKER_TOKEN = process.env.BOTMAKER_TOKEN ?? "";
-const BASE_V1 = "https://go.botmaker.com/api/v1.0";
-const BASE_V2 = "https://api.botmaker.com/v2.0";
+const BASE = "https://api.botmaker.com/v2.0";
 const TIMEOUT_MS = 20_000;
 
 function headers(): Record<string, string> {
@@ -36,121 +35,128 @@ function handleError(error: unknown): string {
 function toJson(data: unknown): string { return JSON.stringify(data, null, 2); }
 
 function makeServer(): McpServer {
-  const server = new McpServer({ name: "botmaker-mcp-server", version: "1.0.0" });
+  const server = new McpServer({ name: "botmaker-mcp-server", version: "2.0.0" });
 
+  // ── INTENTS ──────────────────────────────────────────────
   server.registerTool("botmaker_list_intents", {
     title: "Listar intenciones del bot",
-    description: "Lista todas las intenciones/reglas configuradas en el bot de Botmaker con IDs, nombres y estado.",
-    inputSchema: z.object({}),
+    description: "Lista todas las intenciones del bot. Devuelve páginas de 200; si hay más, el campo nextPage trae la URL de la siguiente página.",
+    inputSchema: z.object({
+      nextPage: z.string().optional().describe("URL de la siguiente página (del campo nextPage de la respuesta anterior)")
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
+  }, async ({ nextPage }) => {
     try {
-      const data = await apiGet<unknown>(`${BASE_V1}/intent/list`);
-      const items: any[] = Array.isArray(data) ? data : ((data as any)?.items ?? [data]);
-      return { content: [{ type: "text", text: toJson({ total: items.length, intents: items.map((i: any) => ({ id: i.id ?? i._id, name: i.name ?? i.intentName, description: i.description ?? "", enabled: i.enabled ?? true })) }) }] };
+      const url = nextPage ?? `${BASE}/intents`;
+      const data = await apiGet<unknown>(url);
+      return { content: [{ type: "text", text: toJson(data) }] };
     } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
   });
 
   server.registerTool("botmaker_get_intent", {
     title: "Ver detalle de una intención",
-    description: "Obtiene detalle completo de una intención: patrones, respuestas, acciones y variables.\nArgs:\n- intent_id: ID de la intención",
-    inputSchema: z.object({ intent_id: z.string().min(1).describe("ID de la intención") }),
+    description: "Obtiene el detalle completo de una intención por ID o nombre.\nArgs:\n- idOrName: ID o nombre de la intención",
+    inputSchema: z.object({
+      idOrName: z.string().min(1).describe("ID o nombre de la intención")
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ intent_id }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/intent/${intent_id}`)) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_list_customers", {
-    title: "Listar contactos",
-    description: "Lista contactos registrados en Botmaker.\nArgs:\n- limit: máx resultados (default 20)\n- offset: paginación (default 0)",
-    inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ limit, offset }) => {
+  }, async ({ idOrName }) => {
     try {
-      const data = await apiGet<unknown>(`${BASE_V1}/customer/list`, { limit, offset });
-      const items: any[] = Array.isArray(data) ? data : ((data as any)?.items ?? []);
-      return { content: [{ type: "text", text: toJson({ total_returned: items.length, has_more: items.length === limit, customers: items.map((c: any) => ({ id: c.id ?? c._id, name: c.name ?? c.displayName, phone: c.phone ?? "", email: c.email ?? "", platform: c.platform ?? "" })) }) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_get_customer", {
-    title: "Ver detalle de un contacto",
-    description: "Obtiene información completa de un contacto.\nArgs:\n- customer_id: ID del contacto",
-    inputSchema: z.object({ customer_id: z.string().min(1).describe("ID del contacto") }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ customer_id }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/customer/${customer_id}`)) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_check_whatsapp", {
-    title: "Verificar número de WhatsApp",
-    description: "Verifica si un número tiene WhatsApp activo.\nArgs:\n- phone: número con código de país sin +. Ej: 5491112345678",
-    inputSchema: z.object({ phone: z.string().min(6).describe("Ej: 5491112345678") }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ phone }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/customer/checkWhatsAppContact`, { phone })) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_list_conversations", {
-    title: "Listar conversaciones recientes",
-    description: "Lista conversaciones recientes.\nArgs:\n- limit: máx (default 20)\n- offset: paginación (default 0)",
-    inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20), offset: z.number().int().min(0).default(0) }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ limit, offset }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V2}/messages`, { limit, offset })) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_get_chat_history", {
-    title: "Ver historial de chat",
-    description: "Obtiene historial de mensajes de un contacto.\nArgs:\n- customer_id: ID del contacto",
-    inputSchema: z.object({ customer_id: z.string().min(1).describe("ID del contacto") }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async ({ customer_id }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/message/list/${customer_id}`)) }] };
-    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
-  });
-
-  server.registerTool("botmaker_send_message", {
-    title: "Enviar mensaje a un usuario",
-    description: "Envía un mensaje real a un usuario. ⚠️ Acción real.\nArgs:\n- customer_id: ID destinatario\n- platform: whatsapp/instagram/messenger/webchat\n- message: texto",
-    inputSchema: z.object({ customer_id: z.string().min(1), platform: z.string().min(1), message: z.string().min(1).max(4000) }),
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ customer_id, platform, message }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiPost<unknown>(`${BASE_V1}/message/v3`, { chatPlatform: platform, chatChannelNumber: customer_id, messageText: message })) }] };
+      const data = await apiGet<unknown>(`${BASE}/intents/${encodeURIComponent(idOrName)}`);
+      return { content: [{ type: "text", text: toJson(data) }] };
     } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
   });
 
   server.registerTool("botmaker_trigger_intent", {
     title: "Disparar una intención",
-    description: "Activa una intención del bot para testear.\nArgs:\n- intent_id: ID de la intención",
-    inputSchema: z.object({ intent_id: z.string().min(1) }),
+    description: "Dispara una intención o template de WhatsApp en un chat específico.\nArgs:\n- channelId: ID del canal (ej: botproject-whatsapp-5491147038xxx)\n- contactId: teléfono del contacto (ej: 5491147038xxx)\n- intentIdOrName: ID o nombre de la intención\n- variables: variables opcionales { varName: value }\n- tags: tags opcionales { tagName: true }",
+    inputSchema: z.object({
+      channelId: z.string().min(1).describe("ID del canal (ej: botproject-whatsapp-5491147038xxx)"),
+      contactId: z.string().min(1).describe("Teléfono del contacto (ej: 5491147038xxx)"),
+      intentIdOrName: z.string().min(1).describe("ID o nombre de la intención"),
+      variables: z.record(z.string()).optional().describe("Variables opcionales"),
+      tags: z.record(z.boolean()).optional().describe("Tags opcionales"),
+    }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, async ({ intent_id }) => {
-    try { return { content: [{ type: "text", text: toJson(await apiPost<unknown>(`${BASE_V1}/intent/v2`, { intentId: intent_id })) }] };
+  }, async ({ channelId, contactId, intentIdOrName, variables, tags }) => {
+    try {
+      const body: any = { chat: { channelId, contactId }, intentIdOrName };
+      if (variables) body.variables = variables;
+      if (tags) body.tags = tags;
+      const data = await apiPost<unknown>(`${BASE}/chats-actions/trigger-intent`, body);
+      return { content: [{ type: "text", text: toJson(data) }] };
     } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
   });
 
-  server.registerTool("botmaker_get_account_info", {
-    title: "Ver info de la cuenta",
-    description: "Obtiene información general de la cuenta Botmaker.",
-    inputSchema: z.object({}),
+  // ── CHATS ─────────────────────────────────────────────────
+  server.registerTool("botmaker_list_chats", {
+    title: "Listar y buscar chats",
+    description: "Lista o busca chats ordenados por última actividad. Máx 250 por request.\nArgs opcionales:\n- channelId: filtrar por canal\n- contactId: teléfono (requiere channelId)\n- name: nombre del contacto\n- from/to: rango de fechas ISO8601\n- nextPage: URL de la página siguiente",
+    inputSchema: z.object({
+      channelId: z.string().optional().describe("ID del canal"),
+      contactId: z.string().optional().describe("Teléfono del contacto"),
+      name: z.string().optional().describe("Nombre del contacto"),
+      from: z.string().optional().describe("Fecha desde (ISO8601, ej: 2024-01-01T00:00:00Z)"),
+      to: z.string().optional().describe("Fecha hasta (ISO8601)"),
+      nextPage: z.string().optional().describe("URL de la siguiente página"),
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/account`)) }] };
+  }, async ({ channelId, contactId, name, from, to, nextPage }) => {
+    try {
+      const url = nextPage ?? `${BASE}/chats`;
+      const params: Record<string, string> = {};
+      if (channelId) params["channel-id"] = channelId;
+      if (contactId) params["contact-id"] = contactId;
+      if (name) params["name"] = name;
+      if (from) params["from"] = from;
+      if (to) params["to"] = to;
+      const data = await apiGet<unknown>(url, Object.keys(params).length ? params : undefined);
+      return { content: [{ type: "text", text: toJson(data) }] };
     } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
   });
 
-  server.registerTool("botmaker_list_channels", {
-    title: "Listar canales configurados",
-    description: "Lista todos los canales configurados: WhatsApp, Instagram, Messenger, webchat, etc.",
-    inputSchema: z.object({}),
+  server.registerTool("botmaker_get_chat", {
+    title: "Ver detalle de un chat",
+    description: "Obtiene el estado de un chat. Solo chats con actividad de menos de 2 meses.\nArgs:\n- chatReference: chatId, o 'channelId:contactId' (ej: botproject-whatsapp-xxx:5491147038xxx), o externalId",
+    inputSchema: z.object({
+      chatReference: z.string().min(1).describe("chatId, o channelId:contactId, o externalId")
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, async () => {
-    try { return { content: [{ type: "text", text: toJson(await apiGet<unknown>(`${BASE_V1}/channel/list`)) }] };
+  }, async ({ chatReference }) => {
+    try {
+      const data = await apiGet<unknown>(`${BASE}/chats/${encodeURIComponent(chatReference)}`);
+      return { content: [{ type: "text", text: toJson(data) }] };
+    } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
+  });
+
+  // ── MESSAGES ──────────────────────────────────────────────
+  server.registerTool("botmaker_list_messages", {
+    title: "Ver historial de mensajes",
+    description: "Historial de mensajes de todos los chats o de uno específico. Máx 1000 por página.\nArgs opcionales:\n- chatId: ID del chat específico\n- channelId + contactId: alternativa al chatId\n- from/to: rango de fechas ISO8601\n- limit: entre 250 y 1500 (default 250)\n- platform: whatsapp, messenger, webchat, etc.",
+    inputSchema: z.object({
+      chatId: z.string().optional().describe("chatId de Botmaker"),
+      channelId: z.string().optional().describe("ID del canal"),
+      contactId: z.string().optional().describe("Teléfono del contacto"),
+      from: z.string().optional().describe("Fecha desde (ISO8601)"),
+      to: z.string().optional().describe("Fecha hasta (ISO8601)"),
+      limit: z.number().int().min(250).max(1500).default(250).optional().describe("Cantidad de mensajes (250-1500)"),
+      platform: z.string().optional().describe("whatsapp, messenger, webchat, telegram, etc."),
+      nextPage: z.string().optional().describe("URL de la siguiente página"),
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ chatId, channelId, contactId, from, to, limit, platform, nextPage }) => {
+    try {
+      const url = nextPage ?? `${BASE}/messages`;
+      const params: Record<string, string> = {};
+      if (chatId) params["chat-id"] = chatId;
+      if (channelId) params["channel-id"] = channelId;
+      if (contactId) params["contact-id"] = contactId;
+      if (from) params["from"] = from;
+      if (to) params["to"] = to;
+      if (limit) params["limit"] = String(limit);
+      if (platform) params["chat-platform"] = platform;
+      const data = await apiGet<unknown>(url, Object.keys(params).length ? params : undefined);
+      return { content: [{ type: "text", text: toJson(data) }] };
     } catch (e) { return { content: [{ type: "text", text: handleError(e) }] }; }
   });
 
@@ -159,47 +165,33 @@ function makeServer(): McpServer {
 
 async function main() {
   if (!BOTMAKER_TOKEN) { console.error("❌ ERROR: BOTMAKER_TOKEN no configurado."); process.exit(1); }
-
   const app = express();
   app.use(express.json());
 
-  // HEAD y GET en /mcp — requerido por Claude.ai para protocol discovery
   app.head("/mcp", (_req: Request, res: Response) => {
     res.setHeader("MCP-Protocol-Version", "2025-03-26");
     res.setHeader("Allow", "GET, POST, HEAD");
     res.status(200).end();
   });
-
   app.get("/mcp", (_req: Request, res: Response) => {
-    res.setHeader("MCP-Protocol-Version", "2025-03-26");
-    res.status(405).setHeader("Allow", "POST").json({ error: "Use POST to connect to this MCP server" });
+    res.status(405).setHeader("Allow", "POST").json({ error: "Use POST to connect" });
   });
-
-  // POST /mcp — endpoint principal
   app.post("/mcp", async (req: Request, res: Response) => {
     const server = makeServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => transport.close());
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   });
-
-  // Health check
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", service: "botmaker-mcp-server", version: "1.0.0" });
+    res.json({ status: "ok", service: "botmaker-mcp-server", version: "2.0.0" });
   });
-
   app.get("/", (_req: Request, res: Response) => {
     res.json({ service: "botmaker-mcp-server", mcp_endpoint: "/mcp", health: "/health" });
   });
 
   const port = parseInt(process.env.PORT ?? "3000");
-  app.listen(port, () => {
-    console.error(`✅ Botmaker MCP Server corriendo en puerto ${port}`);
-  });
+  app.listen(port, () => { console.error(`✅ Botmaker MCP Server v2 corriendo en puerto ${port}`); });
 }
 
 main().catch((err) => { console.error("Error fatal:", err); process.exit(1); });
